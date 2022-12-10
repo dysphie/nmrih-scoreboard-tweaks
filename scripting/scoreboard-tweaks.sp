@@ -1,105 +1,105 @@
-#include <sourcemod>
-#include <sdktools>
+#pragma semicolon 1
 
-public Plugin myinfo = {
-    name        = "Scoreboard Tweaks",
-    author      = "Dysphie",
-    description = "Remembers scores for reconnecting players and resets them on a new round",
-    version     = "1.0.0",
-    url         = ""
+#undef MAXPLAYERS
+#define MAXPLAYERS	8
+
+enum
+{
+	S_Deaths,
+	S_Frags,
+
+	S_Total
 };
 
-ConVar svKillOnDisconnect;
+StringMap
+	g_hScore;
+bool
+	g_bKPoD;
+int
+	g_iScore[S_Total];
+char
+	g_sSteamID[MAXPLAYERS+1][64];	// https://github.com/alliedmodders/sourcemod/pull/1696
 
-enum struct Score
+public Plugin myinfo =
 {
-	int kills;
-	int deaths;
+	name		= "Scoreboard Tweaks",
+	version		= "1.1.0 (rewritten by Grey83)",
+	description	= "Remembers scores for reconnecting players and resets them on a new round",
+	author		= "Dysphie",
+	url			= "https://forums.alliedmods.net/showthread.php?t=340780"
 }
-
-StringMap g_ScoreBackup;
 
 public void OnPluginStart()
 {
-	svKillOnDisconnect = FindConVar("sv_kill_player_on_disconnect");
+	ConVar cvar = FindConVar("sv_kill_player_on_disconnect");
+	if(cvar)
+	{
+		cvar.AddChangeHook(CVarChange);
+		g_bKPoD = cvar.BoolValue;
+	}
 
-	g_ScoreBackup = new StringMap();
-	HookEvent("nmrih_reset_map", OnMapReset, EventHookMode_Pre);
+	g_hScore = new StringMap();
+
+	HookEvent("nmrih_reset_map", Event_MapReset, EventHookMode_Pre);
+
+	for(int i = 1; i <= MaxClients; i++) if(IsClientInGame(i) && !IsFakeClient(i) && IsClientAuthorized(i))
+		GetClientAuthId(i, AuthId_Steam2, g_sSteamID[i], sizeof(g_sSteamID[]));
 }
 
-public void OnMapEnd()
+public void CVarChange(ConVar cvar, const char[] oldValue, const char[] newValue)
 {
-	g_ScoreBackup.Clear();
+	g_bKPoD = cvar.BoolValue;
 }
 
 public void OnMapStart()
 {
-	g_ScoreBackup.Clear();
+	g_hScore.Clear();
 }
 
-Action OnMapReset(Event event, const char[] name, bool dontBroadcast)
+public void OnMapEnd()
 {
-	g_ScoreBackup.Clear();
+	g_hScore.Clear();
+}
 
-	for (int client = 1; client <= MaxClients; client++)
+public void Event_MapReset(Event event, const char[] name, bool dontBroadcast)
+{
+	g_hScore.Clear();
+
+	for(int i = 1; i <= MaxClients; i++) if(IsClientInGame(i))
 	{
-		if (IsClientInGame(client))
-		{
-			SetClientDeaths(client, 0);
-			SetClientFrags(client, 0);
-		}
+		SetClientScore(i, S_Deaths);
+		SetClientScore(i, S_Frags);
 	}
-	
-	return Plugin_Continue;
+}
+
+public void OnClientAuthorized(int client, const char[] auth)	// Client Steam2 id, if available, else engine auth id.
+{
+	if(IsFakeClient(client) || !g_hScore.GetArray(auth, g_iScore, S_Total))
+		return;
+
+	FormatEx(g_sSteamID[client], sizeof(g_sSteamID[]), auth);
+
+	SetClientScore(client, S_Frags, g_iScore[S_Frags] + GetClientFrags(client));
+	SetClientScore(client, S_Deaths, g_iScore[S_Deaths] + GetClientDeaths(client));
 }
 
 public void OnClientDisconnect(int client)
 {
-	if (!IsClientInGame(client))
-		return;
-
-	char steamId[MAX_AUTHID_LENGTH];
-	if (GetClientAuthId(client, AuthId_SteamID64, steamId, sizeof(steamId)))
+	if(g_sSteamID[client][0] && IsClientInGame(client))
 	{
-		Score score;
-		score.kills = GetClientFrags(client);
-		score.deaths = GetClientDeaths(client);
+		g_iScore[S_Frags]	= GetClientFrags(client);
+		g_iScore[S_Deaths]	= GetClientDeaths(client);
 
-		if (IsPlayerAlive(client) && svKillOnDisconnect.BoolValue) 
-		{
-			// The server will kill them, but we are early, so manually add to the death count
-			score.deaths++;
-		}
+		// The server will kill them, but we are early, so manually add to the death count
+		if(g_bKPoD && IsPlayerAlive(client)) g_iScore[S_Deaths]++;
 
-		g_ScoreBackup.SetArray(steamId, score, sizeof(score));
-	}
-}
-
-#define STATE_ROUND_ONGOING 3
-
-public void OnClientPostAdminCheck(int client)
-{
-	if (GameRules_GetProp("_roundState") != STATE_ROUND_ONGOING) {
-		return;
+		g_hScore.SetArray(g_sSteamID[client], g_iScore, S_Total);
 	}
 
-	char steamId[MAX_AUTHID_LENGTH];
-	if (GetClientAuthId(client, AuthId_SteamID64, steamId, sizeof(steamId)))
-	{
-		Score score;
-		g_ScoreBackup.GetArray(steamId, score, sizeof(score));
-
-		SetClientFrags(client, score.kills + GetClientFrags(client));
-		SetClientDeaths(client, score.deaths + GetClientDeaths(client));
-	}
+	g_sSteamID[client][0] = 0;
 }
 
-void SetClientFrags(int client, int frags)
+stock void SetClientScore(int client, int type, int value = 0)
 {
-	SetEntProp(client, Prop_Data, "m_iFrags", frags);
-}
-
-void SetClientDeaths(int client, int deaths)
-{
-	SetEntProp(client, Prop_Data, "m_iDeaths", deaths);
+	SetEntProp(client, Prop_Data, type == S_Frags ? "m_iFrags" : "m_iDeaths", value);
 }
