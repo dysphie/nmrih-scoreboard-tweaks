@@ -1,3 +1,6 @@
+> [!WARNING]
+> This plugin is unmaintained since Torn Banner's acquisition of the game.
+
 # [NMRiH] Scoreboard Tweaks
 
 - Remembers scores for reconnecting players
